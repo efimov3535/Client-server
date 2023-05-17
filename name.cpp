@@ -1,0 +1,170 @@
+﻿#include <iostream>  
+#include <string>
+#include <boost/asio.hpp>  
+#include <boost/bind.hpp>  
+#include <boost/enable_shared_from_this.hpp>  
+#include <chrono>
+
+using namespace boost::asio;
+using ip::tcp;
+using std::cout;
+using std::endl;
+
+void message(std::string& msg, char* data)
+{
+    using namespace std::chrono_literals;
+    std::this_thread::sleep_for(20ms);
+    msg = data;
+
+    std::vector<int> vect;
+
+    int a = stoi(msg);
+    int a1 = a;
+
+    int k = 0;
+    while (a1 != 0)
+    {
+        a1 /= 10;
+        k++;
+    }
+    if (a == 0)
+        msg.erase(0, 1);
+    else if (a < 0)
+        msg.erase(0, k + 1);
+    else
+        msg.erase(0, k);
+        
+    bool flag = false;
+    int b;
+    char ca;
+    for (int i = 0; i < size(msg); i++)
+    {
+        if (msg[i] == '+' || msg[i] == '-' || msg[i] == '/' || msg[i] == '*')
+        {
+            ca = msg[i];
+            msg.erase(i, 1);
+            i--;
+            flag = true;
+        }
+        if (flag)
+            b = stoi(msg);            
+    }
+
+    if (ca == '+')
+    {
+        a = a + b;
+        msg = std::to_string(a);
+    }
+    else if (ca == '-')
+    {
+        a = a - b;
+        msg = std::to_string(a);
+    }
+    else if (ca == '*')
+    {
+        a = a * b;
+        msg = std::to_string(a);
+    }
+
+    else
+    {
+        a = a / b;
+        msg = std::to_string(a);
+    }
+}
+
+class con_handler : public boost::enable_shared_from_this<con_handler>
+{
+private:
+    tcp::socket sock;
+    std::string msg;
+    enum { max_length = 1024 };
+    char data[max_length];
+public:
+    typedef boost::shared_ptr<con_handler> pointer;
+    con_handler(boost::asio::io_service& io_service) : sock(io_service) {}
+
+    // creating the pointer  
+    static pointer create(boost::asio::io_service& io_service) {
+        return pointer(new con_handler(io_service));
+    }
+
+    //socket creation  
+    tcp::socket& socket() {
+        return sock;
+    }
+
+    void start() {
+        sock.async_read_some(boost::asio::buffer(data, max_length),
+            boost::bind(&con_handler::handle_read,
+                shared_from_this(),
+                boost::asio::placeholders::error,
+                boost::asio::placeholders::bytes_transferred));
+
+        message(msg, data);
+
+        sock.async_write_some(
+            boost::asio::buffer(msg, max_length),
+            boost::bind(&con_handler::handle_write,
+                shared_from_this(),
+                boost::asio::placeholders::error,
+                boost::asio::placeholders::bytes_transferred));
+    }
+
+    void handle_read(const boost::system::error_code& err, size_t bytes_transferred) {
+        if (err) {
+            std::cerr << "error: " << err.message() << std::endl;
+            sock.close();
+        }
+    }
+
+    void handle_write(const boost::system::error_code& err, size_t bytes_transferred) {
+        if (err) {
+            std::cerr << "error: " << err.message() << endl;
+            sock.close();
+        }
+    }
+};
+
+
+class Server {
+private:
+    tcp::acceptor acceptor_;
+    void start_accept() {
+        // socket  
+        con_handler::pointer connection =
+            con_handler::create((boost::asio::io_context&)(acceptor_).get_executor().context());
+        // asynchronous accept operation and wait for a new connection.  
+        acceptor_.async_accept(connection->socket(),
+            boost::bind(&Server::handle_accept, this, connection,
+                boost::asio::placeholders::error));
+    }
+
+public:
+    // constructor for accepting connection from client  
+    Server(boost::asio::io_service& io_service) : acceptor_(io_service, tcp::endpoint(tcp::v4(), 1234)) {
+        start_accept();
+    }
+
+    void handle_accept(con_handler::pointer connection, const boost::system::error_code& err) {
+        if (!err) {
+            connection->start();
+        }
+        start_accept();
+    }
+};
+
+int main(int argc, char* argv[])
+{
+    try {
+        boost::asio::io_service io_service;
+        Server server(io_service);
+        io_service.run();
+    }
+
+    catch (std::exception& e) {
+        std::cerr << e.what() << endl;
+    }
+    return 0;
+}
+
